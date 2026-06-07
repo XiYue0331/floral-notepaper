@@ -5,6 +5,8 @@ import { useTranslation } from "react-i18next";
 import { createNote, getErrorMessage, getNote, listNotes, updateNote } from "../features/notes/api";
 import { useImagePaste } from "../features/images/useImagePaste";
 import { useImageBaseDir } from "../features/images/useImageBaseDir";
+import { InlineMarkdownTextarea, serializeEditableContent } from "./InlineMarkdownTextarea";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { reportInstallPreparation } from "../features/update/api";
 import type { UpdateInstallPrepareRequest } from "../features/update/types";
 import type { Note, NoteMetadata } from "../features/notes/types";
@@ -135,7 +137,7 @@ export function NotePad({
   );
   const [isExiting, setIsExiting] = useState(false);
   const titleRef = useRef<HTMLInputElement>(null);
-  const contentRef = useRef<HTMLTextAreaElement>(null);
+  const contentRef = useRef<HTMLDivElement | null>(null);
   const windowLabelRef = useRef("");
   const statusRef = useRef<NotePadStatus>("empty");
   const isStandby = useRef(
@@ -376,16 +378,38 @@ export function NotePad({
     }
   }, [editingNoteId, saveNote]);
 
+  const insertImageAtSelection = useCallback(
+    (relativePath: string) => {
+      const editor = contentRef.current;
+      if (!editor || !editingNoteId) return;
+      const normalizedBaseDir = imageBaseDir?.replace(/\\/g, "/").replace(/\/$/, "");
+      const displaySrc = normalizedBaseDir && relativePath.startsWith("images/")
+        ? convertFileSrc(`${normalizedBaseDir}/${relativePath}`)
+        : relativePath;
+
+      editor.focus();
+      document.execCommand(
+        "insertHTML",
+        false,
+        `<img src="${displaySrc}" data-md-src="${relativePath}" contenteditable="false" class="inline-markdown-image" />`,
+      );
+      setContent(serializeEditableContent(editor));
+      setStatus("dirty");
+    },
+    [editingNoteId, imageBaseDir, setContent],
+  );
+
   const {
     handlePaste: imagePasteHandler,
     handleDrop: imageDropHandler,
     handleDragOver: imageDragOverHandler,
   } = useImagePaste({
     noteId: editingNoteId,
-    textareaRef: contentRef,
+    editableRef: contentRef,
     setContent,
     markDirty: () => setStatus("dirty"),
     onEnsureNoteSaved: ensureNoteSaved,
+    insertImage: insertImageAtSelection,
     onError: setErrorMessage,
     t,
   });
@@ -706,12 +730,11 @@ export function NotePad({
                   style={{ fontSize: `${surfaceFontSize}px` }}
                 />
 
-                <textarea
-                  ref={contentRef}
-                  data-tab-indent="true"
+                <InlineMarkdownTextarea
+                  editorRef={contentRef}
                   value={content}
-                  onChange={(event) => {
-                    setContent(event.target.value);
+                  onChange={(markdown) => {
+                    setContent(markdown);
                     setStatus("dirty");
                   }}
                   onPaste={imagePasteHandler}
@@ -719,19 +742,30 @@ export function NotePad({
                   onDragOver={imageDragOverHandler}
                   onKeyDown={(event) => {
                     if (event.key === "ArrowUp") {
-                      const ta = contentRef.current;
-                      if (ta && ta.selectionStart === ta.selectionEnd) {
-                        const textBeforeCursor = content.slice(0, ta.selectionStart);
-                        if (!textBeforeCursor.includes("\n")) {
-                          event.preventDefault();
-                          titleRef.current?.focus();
+                      const editor = contentRef.current;
+                      if (editor) {
+                        const selection = window.getSelection();
+                        if (selection?.rangeCount === 1) {
+                          const range = selection.getRangeAt(0);
+                          if (range.collapsed) {
+                            const preCaretRange = range.cloneRange();
+                            preCaretRange.selectNodeContents(editor);
+                            preCaretRange.setEnd(range.endContainer, range.endOffset);
+                            const textBeforeCursor = preCaretRange.toString();
+                            if (!textBeforeCursor.includes("\n")) {
+                              event.preventDefault();
+                              titleRef.current?.focus();
+                            }
+                          }
                         }
                       }
                     }
                   }}
                   placeholder={t("notepad.placeholder.content", { defaultValue: "写点什么……" })}
-                  className="w-full flex-1 min-h-0 pb-2 leading-relaxed text-ink-soft font-body placeholder:text-ink-ghost/50"
-                  style={{ fontSize: `${surfaceFontSize}px`, tabSize: `var(--tab-indent-size, 2)` }}
+                  fontSize={surfaceFontSize}
+                  imageBaseDir={imageBaseDir ?? undefined}
+                  disabled={false}
+                  className="w-full flex-1 min-h-0 pb-2"
                 />
 
                 <div className="flex items-center justify-between mt-auto pt-2 border-t border-paper-deep/30 shrink-0">

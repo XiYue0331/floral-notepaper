@@ -15,10 +15,11 @@ const MIME_TO_EXT: Record<string, string> = {
 
 interface UseImagePasteOptions {
   noteId: string | null;
-  textareaRef: React.RefObject<HTMLTextAreaElement | null>;
+  editableRef: React.RefObject<HTMLElement | null>;
   setContent: (content: string) => void;
   markDirty: () => void;
   onEnsureNoteSaved: () => Promise<string | null>;
+  insertImage?: (relativePath: string) => void;
   disabled?: boolean;
   onError?: (message: string) => void;
   t?: TFunction;
@@ -62,6 +63,20 @@ function insertTextAtCursor(
 
 function getImageFiles(dataTransfer: DataTransfer): File[] {
   const files: File[] = [];
+
+  if (dataTransfer.files?.length) {
+    for (let i = 0; i < dataTransfer.files.length; i++) {
+      const file = dataTransfer.files[i];
+      if (file.type in MIME_TO_EXT) {
+        files.push(file);
+      }
+    }
+  }
+
+  if (files.length > 0) {
+    return files;
+  }
+
   for (let i = 0; i < dataTransfer.items.length; i++) {
     const item = dataTransfer.items[i];
     if (item.kind === "file" && item.type in MIME_TO_EXT) {
@@ -69,15 +84,17 @@ function getImageFiles(dataTransfer: DataTransfer): File[] {
       if (file) files.push(file);
     }
   }
+
   return files;
 }
 
 export function useImagePaste({
   noteId,
-  textareaRef,
+  editableRef,
   setContent,
   markDirty,
   onEnsureNoteSaved,
+  insertImage,
   disabled,
   onError,
   t,
@@ -96,19 +113,25 @@ export function useImagePaste({
           if (!resolvedId) return;
         }
 
-        const textarea = textareaRef.current;
-        if (!textarea) return;
+        const editable = editableRef.current;
+        if (!editable) return;
 
-        const markdownLines: string[] = [];
+        const markdownLines: Array<{ markdown: string; relativePath: string }> = [];
         for (const file of files) {
           const relativePath = await processImageFile(file, resolvedId, t);
           if (relativePath) {
-            markdownLines.push(`![](${relativePath})`);
+            markdownLines.push({ markdown: `![](${relativePath})`, relativePath });
           }
         }
 
         if (markdownLines.length > 0) {
-          insertTextAtCursor(textarea, setContent, markdownLines.join("\n"));
+          if (insertImage) {
+            for (const line of markdownLines) {
+              insertImage(line.relativePath);
+            }
+          } else if (editable instanceof HTMLTextAreaElement) {
+            insertTextAtCursor(editable, setContent, markdownLines.map((line) => line.markdown).join("\n"));
+          }
           markDirty();
         }
       } catch (error) {
@@ -121,11 +144,11 @@ export function useImagePaste({
         processingRef.current = false;
       }
     },
-    [noteId, textareaRef, setContent, markDirty, onEnsureNoteSaved, onError, t],
+    [noteId, editableRef, setContent, markDirty, onEnsureNoteSaved, insertImage, onError, t],
   );
 
   const handlePaste = useCallback(
-    (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    (event: React.ClipboardEvent<HTMLElement>) => {
       if (disabled) return;
       const files = getImageFiles(event.clipboardData);
       if (files.length === 0) return;
@@ -136,7 +159,7 @@ export function useImagePaste({
   );
 
   const handleDrop = useCallback(
-    (event: React.DragEvent<HTMLTextAreaElement>) => {
+    (event: React.DragEvent<HTMLElement>) => {
       if (disabled) return;
       const files = getImageFiles(event.dataTransfer);
       if (files.length === 0) return;
@@ -147,7 +170,7 @@ export function useImagePaste({
   );
 
   const handleDragOver = useCallback(
-    (event: React.DragEvent<HTMLTextAreaElement>) => {
+    (event: React.DragEvent<HTMLElement>) => {
       if (disabled) return;
       const hasImage = Array.from(event.dataTransfer.items).some(
         (item) => item.kind === "file" && item.type in MIME_TO_EXT,

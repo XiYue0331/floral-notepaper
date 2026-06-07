@@ -274,7 +274,7 @@ const staticComponents: Components = {
   ),
 };
 
-export function MarkdownPreview({
+export default function MarkdownPreview({
   content,
   fontSize = 14,
   renderHtml = false,
@@ -286,17 +286,25 @@ export function MarkdownPreview({
       ...staticComponents,
       img: ({ src, alt, ...props }) => {
         let resolvedSrc = src ?? "";
-        if (src?.startsWith("images/") && imageBaseDir) {
-          resolvedSrc = convertFileSrc(imageBaseDir + "/" + src);
+        if (src?.startsWith("images/")) {
+          if (imageBaseDir) {
+            const normalizedBaseDir = imageBaseDir.replace(/\\/g, "/").replace(/\/$/, "");
+            resolvedSrc = convertFileSrc(`${normalizedBaseDir}/${src}`);
+          } else {
+            // eslint-disable-next-line no-console
+            console.error("MarkdownPreview: imageBaseDir is not available; image src:", src);
+          }
         }
         return (
-          <img
-            src={resolvedSrc}
-            alt={alt ?? ""}
-            loading="lazy"
-            className="w-[50%] rounded my-2 mx-auto block"
-            {...props}
-          />
+          <div className="inline-markdown-image-wrapper">
+            <img
+              src={resolvedSrc}
+              alt={alt ?? ""}
+              loading="lazy"
+              className="w-[50%] rounded my-2 block"
+              {...props}
+            />
+          </div>
         );
       },
     }),

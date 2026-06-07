@@ -29,6 +29,7 @@
   --color-paper-warm: #f0ebe0;
   --color-paper-deep: #e8e1d3;
   --color-ink: #1a1a18;
+  --editor-caret: #9b5cf6;
   --color-ink-soft: #3d3d38;
   --color-ink-faint: #8a8a80;
   --color-ink-ghost: #b8b8ae;
@@ -65,6 +66,7 @@
   --color-ink-soft: #b5b1a8;
   --color-ink-faint: #928f87;
   --color-ink-ghost: #706d67;
+  --editor-caret: #f1d72f;
   --color-bamboo: #4faa70;
   --color-bamboo-light: #5fc085;
   --color-bamboo-mist: #1c2e22;

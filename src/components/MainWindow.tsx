@@ -4,9 +4,11 @@ import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { emit, listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { AboutPanel } from "./AboutPanel";
 import { exportMarkdownNote, importMarkdownNote } from "../features/importExport/api";
-import { MarkdownPreview } from "../features/markdown/MarkdownPreview";
+import { InlineMarkdownTextarea, serializeEditableContent } from "./InlineMarkdownTextarea";
+import MarkdownPreview from "../features/markdown/MarkdownPreview.tsx";
 import {
   chooseNotesDirectory,
   getConfig,
@@ -107,174 +109,111 @@ type FormatAction =
   | "blockMath";
 
 function applyFormat(
-  textarea: HTMLTextAreaElement,
+  editor: HTMLElement | null,
   action: FormatAction,
   translate: TFunction,
   setContent: (v: string) => void,
   markDirty: () => void,
 ) {
-  const { selectionStart: start, selectionEnd: end, value } = textarea;
-  const selected = value.slice(start, end);
-  const before = value.slice(0, start);
-  const after = value.slice(end);
+  if (!editor) return;
+  editor.focus();
+  const selection = window.getSelection();
+  if (!selection || selection.rangeCount === 0) return;
 
-  const lineStart = before.lastIndexOf("\n") + 1;
-  const currentLine = before.slice(lineStart);
-
-  let result: string;
-  let cursorStart: number;
-  let cursorEnd: number;
+  const selected = selection.toString();
+  let insertion = "";
 
   switch (action) {
     case "bold": {
       const fallback = translate("main.formatSample.boldText", { defaultValue: "粗体文本" });
-      const wrapped = `**${selected || fallback}**`;
-      result = before + wrapped + after;
-      cursorStart = start + 2;
-      cursorEnd = cursorStart + (selected || fallback).length;
+      insertion = `**${selected || fallback}**`;
       break;
     }
     case "italic": {
       const fallback = translate("main.formatSample.italicText", { defaultValue: "斜体文本" });
-      const wrapped = `*${selected || fallback}*`;
-      result = before + wrapped + after;
-      cursorStart = start + 1;
-      cursorEnd = cursorStart + (selected || fallback).length;
+      insertion = `*${selected || fallback}*`;
       break;
     }
     case "heading": {
-      const prefix = currentLine.match(/^(#{1,5})\s/);
-      if (prefix) {
-        const newLevel = prefix[1].length < 5 ? "#".repeat(prefix[1].length + 1) : "#";
-        const beforeLine = value.slice(0, lineStart);
-        const afterPrefix = value.slice(lineStart + prefix[0].length);
-        result = beforeLine + newLevel + " " + afterPrefix;
-        const offset = newLevel.length + 1 - prefix[0].length;
-        cursorStart = start + offset;
-        cursorEnd = end + offset;
-      } else if (currentLine.length > 0 && start === end) {
-        result = value.slice(0, lineStart) + "## " + value.slice(lineStart);
-        cursorStart = start + 3;
-        cursorEnd = cursorStart;
-      } else if (selected) {
-        result = before + `## ${selected}` + after;
-        cursorStart = start + 3;
-        cursorEnd = cursorStart + selected.length;
+      if (selected) {
+        insertion = `## ${selected}`;
       } else {
-        result =
-          before +
-          `## ${translate("main.formatSample.headingText", { defaultValue: "标题" })}` +
-          after;
-        cursorStart = start + 3;
-        cursorEnd = cursorStart + 2;
+        const fallback = translate("main.formatSample.headingText", { defaultValue: "标题" });
+        insertion = `## ${fallback}`;
       }
       break;
     }
     case "hr": {
-      const newlineBefore = before.endsWith("\n") || before === "" ? "" : "\n";
-      const newlineAfter = after.startsWith("\n") || after === "" ? "" : "\n";
-      result = before + `${newlineBefore}---${newlineAfter}` + after;
-      cursorStart = cursorEnd = before.length + newlineBefore.length + 3;
+      insertion = "---\n";
       break;
     }
     case "ul": {
+      const fallback = translate("main.formatSample.listItem", { defaultValue: "列表项" });
       if (selected.includes("\n")) {
-        const lines = selected
+        insertion = selected
           .split("\n")
-          .map((l) => `- ${l}`)
+          .map((line) => `- ${line}`)
           .join("\n");
-        result = before + lines + after;
-        cursorStart = start;
-        cursorEnd = start + lines.length;
       } else {
-        const fallback = translate("main.formatSample.listItem", { defaultValue: "列表项" });
-        const item = `- ${selected || fallback}`;
-        result = before + item + after;
-        cursorStart = start + 2;
-        cursorEnd = cursorStart + (selected || fallback).length;
+        insertion = `- ${selected || fallback}`;
       }
       break;
     }
     case "ol": {
+      const fallback = translate("main.formatSample.listItem", { defaultValue: "列表项" });
       if (selected.includes("\n")) {
-        const lines = selected
+        insertion = selected
           .split("\n")
-          .map((l, i) => `${i + 1}. ${l}`)
+          .map((line, index) => `${index + 1}. ${line}`)
           .join("\n");
-        result = before + lines + after;
-        cursorStart = start;
-        cursorEnd = start + lines.length;
       } else {
-        const fallback = translate("main.formatSample.listItem", { defaultValue: "列表项" });
-        const item = `1. ${selected || fallback}`;
-        result = before + item + after;
-        cursorStart = start + 3;
-        cursorEnd = cursorStart + (selected || fallback).length;
+        insertion = `1. ${selected || fallback}`;
       }
       break;
     }
     case "code": {
       if (selected.includes("\n")) {
-        const wrapped = "```\n" + selected + "\n```";
-        result = before + wrapped + after;
-        cursorStart = start + 4;
-        cursorEnd = cursorStart + selected.length;
+        insertion = `\`\`\`\n${selected}\n\`\`\``;
       } else {
         const fallback = translate("main.formatSample.codeText", { defaultValue: "代码" });
-        const wrapped = `\`${selected || fallback}\``;
-        result = before + wrapped + after;
-        cursorStart = start + 1;
-        cursorEnd = cursorStart + (selected || fallback).length;
+        insertion = `\`${selected || fallback}\``;
       }
       break;
     }
     case "quote": {
+      const fallback = translate("main.formatSample.quoteText", { defaultValue: "引用文本" });
       if (selected.includes("\n")) {
-        const lines = selected
+        insertion = selected
           .split("\n")
-          .map((l) => `> ${l}`)
+          .map((line) => `> ${line}`)
           .join("\n");
-        result = before + lines + after;
-        cursorStart = start;
-        cursorEnd = start + lines.length;
       } else {
-        const fallback = translate("main.formatSample.quoteText", { defaultValue: "引用文本" });
-        const item = `> ${selected || fallback}`;
-        result = before + item + after;
-        cursorStart = start + 2;
-        cursorEnd = cursorStart + (selected || fallback).length;
+        insertion = `> ${selected || fallback}`;
       }
       break;
     }
     case "inlineMath": {
-      const wrapped = `$${selected || "E=mc^2"}$`;
-      result = before + wrapped + after;
-      cursorStart = start + 1;
-      cursorEnd = cursorStart + (selected || "E=mc^2").length;
+      insertion = `$${selected || "E=mc^2"}$`;
       break;
     }
     case "blockMath": {
-      const wrapped = `\n$$\n${selected || "x^2 + y^2 = r^2"}\n$$\n`;
-      result = before + wrapped + after;
-      cursorStart = start + 4;
-      cursorEnd = cursorStart + (selected || "x^2 + y^2 = r^2").length;
+      insertion = `\n$$\n${selected || "x^2 + y^2 = r^2"}\n$$\n`;
       break;
+    }
+    default: {
+      insertion = selected;
     }
   }
 
-  textarea.focus();
-  textarea.setSelectionRange(0, value.length);
-  document.execCommand("insertText", false, result);
-  setContent(result);
+  document.execCommand("insertText", false, insertion);
+  const markdown = editor instanceof HTMLElement ? serializeEditableContent(editor) : "";
+  setContent(markdown);
   markDirty();
-  requestAnimationFrame(() => {
-    textarea.setSelectionRange(cursorStart, cursorEnd);
-  });
 }
 
-function runEditorCommand(textarea: HTMLTextAreaElement | null, command: "undo" | "redo"): boolean {
-  if (!textarea || textarea.disabled) return false;
-  textarea.focus();
+function runEditorCommand(editor: HTMLElement | null, command: "undo" | "redo"): boolean {
+  if (!editor) return false;
+  editor.focus();
   return document.execCommand(command);
 }
 
@@ -354,7 +293,7 @@ export function MainWindow({
   const [categoryMenu, setCategoryMenu] = useState<CategoryMenuState | null>(null);
   const [categoryMenuClosing, setCategoryMenuClosing] = useState(false);
   const [categoryMenuConfirmDelete, setCategoryMenuConfirmDelete] = useState(false);
-  const contentRef = useRef<HTMLTextAreaElement>(null);
+  const contentRef = useRef<HTMLDivElement | null>(null);
   const windowLabelRef = useRef("main");
   const externalFileMtimeRef = useRef<number>(0);
   const lastExternalSaveRef = useRef<number>(0);
@@ -1402,16 +1341,37 @@ export function MainWindow({
     }
   }, [selectedId, title, content, activeCategory, replaceNoteMetadata, applyNote]);
 
+  const insertImageAtSelection = useCallback(
+    (relativePath: string) => {
+      const editor = contentRef.current;
+      if (!editor) return;
+      const normalizedBaseDir = imageBaseDir?.replace(/\\/g, "/").replace(/\/$/, "");
+      const displaySrc = normalizedBaseDir && relativePath.startsWith("images/")
+        ? convertFileSrc(`${normalizedBaseDir}/${relativePath}`)
+        : relativePath;
+      editor.focus();
+      document.execCommand(
+        "insertHTML",
+        false,
+        `<img src="${displaySrc}" data-md-src="${relativePath}" contenteditable="false" class="inline-markdown-image" />`,
+      );
+      setContent(serializeEditableContent(editor));
+      markDirty();
+    },
+    [imageBaseDir, markDirty, setContent],
+  );
+
   const {
     handlePaste: imagePasteHandler,
     handleDrop: imageDropHandler,
     handleDragOver: imageDragOverHandler,
   } = useImagePaste({
     noteId: selectedId,
-    textareaRef: contentRef,
+    editableRef: contentRef,
     setContent,
     markDirty,
     onEnsureNoteSaved: ensureNoteSaved,
+    insertImage: insertImageAtSelection,
     disabled: isExternal,
     onError: setErrorMessage,
     t,
@@ -1439,18 +1399,18 @@ export function MainWindow({
 
   const handleUndo = () => {
     if (!selectedId) return;
-    const textarea = contentRef.current;
-    if (runEditorCommand(textarea, "undo")) {
-      setContent(textarea?.value ?? content);
+    const editor = contentRef.current;
+    if (runEditorCommand(editor, "undo")) {
+      setContent(editor ? serializeEditableContent(editor) : content);
       markDirty();
     }
   };
 
   const handleRedo = () => {
     if (!selectedId) return;
-    const textarea = contentRef.current;
-    if (runEditorCommand(textarea, "redo")) {
-      setContent(textarea?.value ?? content);
+    const editor = contentRef.current;
+    if (runEditorCommand(editor, "redo")) {
+      setContent(editor ? serializeEditableContent(editor) : content);
       markDirty();
     }
   };
@@ -2560,27 +2520,23 @@ export function MainWindow({
                       </div>
 
                       <div className="flex-1 overflow-hidden px-5 pb-4">
-                        <textarea
-                          ref={contentRef}
-                          data-tab-indent="true"
+                        <InlineMarkdownTextarea
+                          editorRef={contentRef}
                           value={content}
-                          onChange={(event) => {
-                            setContent(event.target.value);
+                          onChange={(markdown) => {
+                            setContent(markdown);
                             markDirty();
                           }}
                           onPaste={imagePasteHandler}
                           onDrop={imageDropHandler}
                           onDragOver={imageDragOverHandler}
-                          className="w-full h-full leading-[1.9] text-ink-soft font-body placeholder:text-ink-ghost/40"
-                          style={{
-                            fontSize: `${settingsConfig?.fontSize ?? 14}px`,
-                            tabSize: `var(--tab-indent-size, 2)`,
-                          }}
                           placeholder={t("main.editor.contentPlaceholder", {
                             defaultValue: "开始写作……",
                           })}
-                          spellCheck={false}
+                          fontSize={settingsConfig?.fontSize ?? 14}
+                          imageBaseDir={imageBaseDir ?? undefined}
                           disabled={!selectedId}
+                          className="w-full h-full"
                         />
                       </div>
                     </div>
